@@ -45,6 +45,7 @@ public class CitaController {
                 .orElse(ResponseEntity.notFound().build());
     }
 
+    @PreAuthorize("hasAnyAuthority('EMPLEADO','GERENTE')")
     @PutMapping("/{id}/estado")
     public ResponseEntity<Cita> actualizarEstadoCita(
             @PathVariable Long id,

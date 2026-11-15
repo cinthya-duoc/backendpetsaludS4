@@ -16,6 +16,7 @@ public class ExpedienteMedicoController {
     @Autowired
     private ExpedienteMedicoService expedienteMedicoService;
 
+    @PreAuthorize("hasAnyAuthority('EMPLEADO','GERENTE')")
     @PostMapping
     public ResponseEntity<ExpedienteMedico> agregarRegistro(
             @RequestParam Long mascotaId,
@@ -25,6 +26,7 @@ public class ExpedienteMedicoController {
         return ResponseEntity.ok(nuevoRegistro);
     }
 
+    @PreAuthorize("hasAnyAuthority('EMPLEADO','GERENTE')")
     @GetMapping("/{id}")
     public ResponseEntity<ExpedienteMedico> obtenerRegistroPorId(@PathVariable Long id) {
         return expedienteMedicoService.obtenerRegistroPorId(id)
@@ -40,6 +42,7 @@ public class ExpedienteMedicoController {
         return ResponseEntity.ok(registros);
     }
 
+    @PreAuthorize("hasAuthority('GERENTE')")
     @DeleteMapping("/{id}")
     public ResponseEntity<Void> eliminarRegistro(@PathVariable Long id) {
         expedienteMedicoService.eliminarRegistro(id);

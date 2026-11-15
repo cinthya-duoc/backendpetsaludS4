@@ -6,6 +6,9 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
+import jakarta.validation.constraints.NotEmpty;
+import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Positive;
 import java.util.List;
 
 @RestController
@@ -16,10 +19,10 @@ public class VentaController {
     private VentaService ventaService;
 
     @PreAuthorize("hasAnyAuthority('EMPLEADO','GERENTE') or @propiedad.esUsuario(#usuarioId, authentication)")
-    @PostMapping                                        // realizarVenta: un cliente no puede comprar a nombre de otro
+    @PostMapping
     public ResponseEntity<Venta> realizarVenta(
-            @RequestParam Long usuarioId,
-            @RequestBody List<Long> productosIds) {
+            @RequestParam @Positive Long usuarioId,
+            @RequestBody @NotEmpty List<@NotNull @Positive Long> productosIds) {
         Venta nuevaVenta = ventaService.realizarVenta(usuarioId, productosIds);
         return ResponseEntity.ok(nuevaVenta);
     }
