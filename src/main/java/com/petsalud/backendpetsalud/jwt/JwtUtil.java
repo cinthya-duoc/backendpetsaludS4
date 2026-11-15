@@ -1,91 +1,108 @@
 package com.petsalud.backendpetsalud.jwt;
 
+import java.nio.charset.StandardCharsets;
+import java.security.GeneralSecurityException;
+import java.security.MessageDigest;
+import java.util.Base64;
 import java.util.Date;
 import java.util.UUID;
 
+import javax.crypto.Mac;
 import javax.crypto.SecretKey;
 
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.stereotype.Component;
+
 import io.jsonwebtoken.Claims;
+import io.jsonwebtoken.JwtException;
+import io.jsonwebtoken.JwtParser;
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.io.Decoders;
 import io.jsonwebtoken.security.Keys;
 
-/**
- * JwtUtil: la "máquina de pulseras" (tokens JWT).
- * Fabrica tokens firmados en el login y los valida en cada petición.
- * La clave, el emisor, la audiencia y la duración vienen de application.properties / .env.
- */
 @Component
 public class JwtUtil {
 
-    @Value("${jwt.secret}")
-    private String secretKey;
+    private static final String CREDENTIAL_VERSION = "credential_version";
+    private static final long MAX_EXPIRATION_MS = 900_000;
 
-    @Value("${jwt.issuer}")
-    private String issuer;        // quién emite el token
+    private final SecretKey key;
+    private final JwtParser parser;
+    private final String issuer;
+    private final String audience;
+    private final long expirationMs;
 
-    @Value("${jwt.audience}")
-    private String audience;      // para quién es el token
+    public JwtUtil(@Value("${jwt.secret}") String secret,
+                   @Value("${jwt.issuer}") String issuer,
+                   @Value("${jwt.audience}") String audience,
+                   @Value("${jwt.expiration-ms}") long expirationMs) {
+        if (expirationMs < 1_000 || expirationMs > MAX_EXPIRATION_MS) {
+            throw new IllegalArgumentException("La duración del JWT debe estar entre 1 segundo y 15 minutos");
+        }
+        this.key = Keys.hmacShaKeyFor(Decoders.BASE64.decode(secret));
+        this.issuer = issuer;
+        this.audience = audience;
+        this.expirationMs = expirationMs;
+        this.parser = Jwts.parser()
+                .verifyWith(key)
+                .requireIssuer(issuer)
+                .requireAudience(audience)
+                .build();
+    }
 
-    @Value("${jwt.expiration-ms}")
-    private long expirationMs;    // duración
-
-    /**
-     * Fabrica el token del usuario con: id único (jti), quién lo emite (iss), para quién es (aud),
-     * el email (sub), fecha de creación (iat) y de vencimiento (exp). Lo firma con la clave secreta (HS256).
-     */
     public String getToken(UserDetails user) {
-        Date ahora = new Date();
+        Date now = new Date();
         return Jwts.builder()
-                .id(UUID.randomUUID().toString())   // "jti": id único de esta pulsera
-                .issuer(issuer)                      // "iss": la emitió PetSalud
-                .audience().add(audience).and()      // "aud": sirve solo para esta API
-                .subject(user.getUsername())         // "sub": el email
-                .issuedAt(ahora)                     // "iat"
-                .expiration(new Date(ahora.getTime() + expirationMs)) // "exp"
-                .signWith(getKey(), Jwts.SIG.HS256)  // el sello
+                .id(UUID.randomUUID().toString())
+                .issuer(issuer)
+                .audience().add(audience).and()
+                .subject(user.getUsername())
+                .issuedAt(now)
+                .expiration(new Date(now.getTime() + expirationMs))
+                .claim(CREDENTIAL_VERSION, credentialVersion(user))
+                .signWith(key, Jwts.SIG.HS256)
                 .compact();
     }
 
-    /**
-     * Convierte la clave secreta (texto Base64 del .env) en la llave usada para firmar y verificar.
-     */
-    private SecretKey getKey() {
-        return Keys.hmacShaKeyFor(Decoders.BASE64.decode(secretKey));
+    public Claims validate(String token) {
+        if (token.isBlank()) {
+            throw new JwtException("Token vacío");
+        }
+        var signed = parser.parseSignedClaims(token);
+        if (!Jwts.SIG.HS256.getId().equals(signed.getHeader().getAlgorithm())) {
+            throw new JwtException("Algoritmo de firma JWT no permitido");
+        }
+        Claims claims = signed.getPayload();
+        Date issuedAt = claims.getIssuedAt();
+        Date expiration = claims.getExpiration();
+        Date now = new Date();
+        if (claims.getId() == null || claims.getId().length() != 36
+                || claims.getSubject() == null || claims.getSubject().isBlank()
+                || claims.get(CREDENTIAL_VERSION, String.class) == null
+                || issuedAt == null || issuedAt.after(now)
+                || expiration == null || !expiration.after(now)
+                || !expiration.after(issuedAt)
+                || expiration.getTime() - issuedAt.getTime() > MAX_EXPIRATION_MS) {
+            throw new JwtException("Claims del token inválidos");
+        }
+        return claims;
     }
 
-    /**
-     * Devuelve el email guardado en el token. Antes valida firma, emisor, audiencia y vencimiento:
-     * si algo falla lanza JwtException (el filtro la convierte en 401).
-     */
-    public String getUsernameFromToken(String token) {
-        return getAllClaims(token).getSubject();
+    public boolean matchesCurrentCredentials(Claims claims, UserDetails user) {
+        return MessageDigest.isEqual(
+                claims.get(CREDENTIAL_VERSION, String.class).getBytes(StandardCharsets.US_ASCII),
+                credentialVersion(user).getBytes(StandardCharsets.US_ASCII));
     }
 
-    /**
-     * Confirma que el token pertenece a ese usuario y que todavía no vence.
-     */
-    public boolean isTokenValid(String token, UserDetails user) {
-        Claims claims = getAllClaims(token);
-        return claims.getSubject().equals(user.getUsername())
-                && claims.getExpiration().after(new Date());
-    }
-
-    // Lee y VALIDA: firma, emisor y audiencia. Si algo no calza, lanza JwtException
-    /**
-     * Abre y verifica el token: firma con nuestra llave, emisor y audiencia correctos.
-     * Si alguien lo modificó o ya venció, lanza una excepción y no se lee nada.
-     */
-    private Claims getAllClaims(String token) {
-        return Jwts.parser()
-                .verifyWith(getKey())
-                .requireIssuer(issuer)
-                .requireAudience(audience)
-                .build()
-                .parseSignedClaims(token)
-                .getPayload();
+    private String credentialVersion(UserDetails user) {
+        try {
+            Mac mac = Mac.getInstance("HmacSHA256");
+            mac.init(key);
+            byte[] input = ("petsalud:credential:v1:" + user.getPassword()).getBytes(StandardCharsets.UTF_8);
+            return Base64.getUrlEncoder().withoutPadding().encodeToString(mac.doFinal(input));
+        } catch (GeneralSecurityException error) {
+            throw new IllegalStateException("No se pudo comprobar la versión de credenciales", error);
+        }
     }
 }

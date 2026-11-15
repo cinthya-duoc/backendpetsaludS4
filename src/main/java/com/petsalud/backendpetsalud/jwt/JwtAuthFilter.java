@@ -2,7 +2,6 @@ package com.petsalud.backendpetsalud.jwt;
 
 import java.io.IOException;
 
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpHeaders;
 import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
@@ -16,88 +15,73 @@ import com.petsalud.backendpetsalud.security.JwtAuthenticationEntryPoint;
 import com.petsalud.backendpetsalud.security.UsuarioDetailsService;
 import com.petsalud.backendpetsalud.security.monitor.ActividadSospechosaService;
 
+import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.JwtException;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 
-/**
- * JwtAuthFilter: el "guardia" que revisa el token en cada petición, antes de llegar al controller.
- * Si el token es válido, marca al usuario como autenticado con su rol.
- * Si es falso, vencido o el usuario ya no existe, responde 401 en formato JSON.
- */
 @Component
 public class JwtAuthFilter extends OncePerRequestFilter {
 
-    @Autowired
-    private JwtUtil jwtUtil;
+    public static final String VALIDATED_CLAIMS = "petsalud.jwt.validatedClaims";
 
-    @Autowired
-    private UsuarioDetailsService usuarioDetailsService;
+    private final JwtUtil jwtUtil;
+    private final JwtRevocations revocations;
+    private final UsuarioDetailsService usuarioDetailsService;
+    private final JwtAuthenticationEntryPoint authenticationEntryPoint;
+    private final ActividadSospechosaService actividadSospechosa;
 
-    @Autowired
-    private JwtAuthenticationEntryPoint authenticationEntryPoint;
+    public JwtAuthFilter(JwtUtil jwtUtil, JwtRevocations revocations,
+                         UsuarioDetailsService usuarioDetailsService,
+                         JwtAuthenticationEntryPoint authenticationEntryPoint,
+                         ActividadSospechosaService actividadSospechosa) {
+        this.jwtUtil = jwtUtil;
+        this.revocations = revocations;
+        this.usuarioDetailsService = usuarioDetailsService;
+        this.authenticationEntryPoint = authenticationEntryPoint;
+        this.actividadSospechosa = actividadSospechosa;
+    }
 
-    @Autowired
-    private ActividadSospechosaService actividadSospechosa;
-
-    /**
-     * Se ejecuta una vez por petición:
-     * 1) busca el header "Authorization: Bearer ...";  2) lee y valida el token;
-     * 3) carga el usuario desde la BD;  4) confirma que el token es suyo y está vigente;
-     * 5) lo anota en el SecurityContext para que SecurityConfig y @PreAuthorize revisen su rol.
-     * Si no viene token, deja pasar sin marcar: SecurityConfig decidirá si la ruta es pública.
-     */
     @Override
-    protected void doFilterInternal(HttpServletRequest request,
-                                    HttpServletResponse response,
+    protected boolean shouldNotFilter(HttpServletRequest request) {
+        return "POST".equals(request.getMethod()) && "/auth/login".equals(request.getServletPath());
+    }
+
+    @Override
+    protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response,
                                     FilterChain filterChain) throws ServletException, IOException {
-
-        // 1. ¿Trae pulsera? Buscar el header "Authorization: Bearer xxxxx"
-        String authHeader = request.getHeader(HttpHeaders.AUTHORIZATION);
-
-        if (authHeader == null || !authHeader.startsWith("Bearer ")) {
-            // No trae token: dejarla seguir sin marcar (SecurityConfig decidirá)
-            filterChain.doFilter(request, response);
-            return;
-        }
-
-        String token = authHeader.substring(7); // quita "Bearer " (7 caracteres)
-
-        // 2. ¿De quién es? Leer el email del token (aquí se verifica la firma)
-        String email;
-        try {
-            // 2. ¿De quién es? (verifica firma, emisor, audiencia y vencimiento)
-            email = jwtUtil.getUsernameFromToken(token);
-
-            if (email != null && SecurityContextHolder.getContext().getAuthentication() == null) {
-                // 3. ¿Existe? (si el usuario fue eliminado, lanza UsernameNotFoundException)
-                UserDetails user = usuarioDetailsService.loadUserByUsername(email);
-
-                // 4. ¿Es válida?
-                if (jwtUtil.isTokenValid(token, user)) {
-                    // 5. Marcar como autenticado
-                    UsernamePasswordAuthenticationToken authToken =
-                            new UsernamePasswordAuthenticationToken(user, null, user.getAuthorities());
-                    SecurityContextHolder.getContext().setAuthentication(authToken);
+        String authorization = request.getHeader(HttpHeaders.AUTHORIZATION);
+        if (authorization != null && authorization.regionMatches(true, 0, "Bearer ", 0, 7)) {
+            try {
+                Claims claims = jwtUtil.validate(authorization.substring(7));
+                if (revocations.isRevoked(claims.getId())) {
+                    throw new JwtException("Token revocado");
                 }
-            }
-        } catch (JwtException e) {
-            actividadSospechosa.registrarTokenInvalido(request, e.getClass().getSimpleName());
-            SecurityContextHolder.clearContext();
-            authenticationEntryPoint.commence(request, response,
-                    new BadCredentialsException("Token inválido o expirado"));
-            return;
-        } catch (UsernameNotFoundException e) {
-            actividadSospechosa.registrarTokenInvalido(request, "usuario eliminado"); 
-            SecurityContextHolder.clearContext();
-            authenticationEntryPoint.commence(request, response,
-                    new BadCredentialsException("El usuario del token ya no existe"));
-            return;
-        }
+                UserDetails user = usuarioDetailsService.loadUserByUsername(claims.getSubject());
+                if (!jwtUtil.matchesCurrentCredentials(claims, user)) {
+                    throw new JwtException("Credenciales actualizadas");
+                }
 
-        // Dejar que la petición siga su camino (al controller)
+                SecurityContextHolder.getContext().setAuthentication(
+                        UsernamePasswordAuthenticationToken.authenticated(user, null, user.getAuthorities()));
+                request.setAttribute(VALIDATED_CLAIMS, claims);
+            } catch (JwtException invalidToken) {
+                reject(request, response, invalidToken.getClass().getSimpleName(), "Token inválido o expirado");
+                return;
+            } catch (UsernameNotFoundException unknownUser) {
+                reject(request, response, "usuario eliminado", "El usuario del token ya no existe");
+                return;
+            }
+        }
         filterChain.doFilter(request, response);
+    }
+
+    private void reject(HttpServletRequest request, HttpServletResponse response, String reason,
+                        String message) throws IOException {
+        actividadSospechosa.registrarTokenInvalido(request, reason);
+        SecurityContextHolder.clearContext();
+        authenticationEntryPoint.commence(request, response, new BadCredentialsException(message));
     }
 }

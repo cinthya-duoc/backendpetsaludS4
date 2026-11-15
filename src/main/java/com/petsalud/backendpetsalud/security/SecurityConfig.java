@@ -1,6 +1,10 @@
 package com.petsalud.backendpetsalud.security;
 
-import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
+import java.net.URI;
+import java.util.Arrays;
+import java.util.List;
+
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.*;
 import org.springframework.http.HttpMethod;
@@ -13,6 +17,10 @@ import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.crypto.bcrypt.*;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
+import org.springframework.security.web.header.writers.ReferrerPolicyHeaderWriter.ReferrerPolicy;
+import org.springframework.web.cors.CorsConfiguration;
+import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 
 import com.petsalud.backendpetsalud.jwt.JwtAuthFilter;
 
@@ -44,13 +52,23 @@ public class SecurityConfig {
      * por eso las más específicas van primero y "anyRequest().authenticated()" al final.
      */
     @Bean
-    public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
+    public SecurityFilterChain securityFilterChain(HttpSecurity http,
+                                                   UrlBasedCorsConfigurationSource corsConfigurationSource)
+            throws Exception {
         http
+                .cors(cors -> cors.configurationSource(corsConfigurationSource))
+                .headers(headers -> headers
+                        .contentSecurityPolicy(csp -> csp.policyDirectives(
+                                "default-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'"))
+                        .httpStrictTransportSecurity(hsts -> hsts
+                                .maxAgeInSeconds(31536000)
+                                .includeSubDomains(false))
+                        .referrerPolicy(policy -> policy.policy(ReferrerPolicy.NO_REFERRER)))
                 .csrf(csrf -> csrf.disable())
                 .authorizeHttpRequests(auth -> auth
                 // 1. PÚBLICAS: no requieren login
                 .requestMatchers(HttpMethod.POST, "/api/usuarios/registro").permitAll()
-                .requestMatchers("/auth/**").permitAll()
+                .requestMatchers(HttpMethod.POST, "/auth/login").permitAll()
                 .requestMatchers("/error").permitAll()
 
                 // 2. SOLO GERENTE
@@ -92,6 +110,39 @@ public class SecurityConfig {
                 .addFilterBefore(jwtAuthFilter, UsernamePasswordAuthenticationFilter.class); //Agregamos el filtro para autenticar con el token
 
         return http.build();
+    }
+
+    @Bean
+    public UrlBasedCorsConfigurationSource corsConfigurationSource(
+            @Value("${APP_CORS_ALLOWED_ORIGINS:}") String allowedOrigins) {
+        CorsConfiguration cors = new CorsConfiguration();
+        cors.setAllowedOrigins(Arrays.stream(allowedOrigins.split(","))
+                .map(String::trim)
+                .filter(origin -> !origin.isEmpty())
+                .map(SecurityConfig::explicitOrigin)
+                .toList());
+        cors.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE"));
+        cors.setAllowedHeaders(List.of("Authorization", "Content-Type"));
+        cors.setAllowCredentials(false);
+        cors.setMaxAge(600L);
+
+        UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
+        source.registerCorsConfiguration("/api/**", cors);
+        source.registerCorsConfiguration("/auth/**", cors);
+        return source;
+    }
+
+    private static String explicitOrigin(String value) {
+        URI origin = URI.create(value);
+        if (!("http".equalsIgnoreCase(origin.getScheme()) || "https".equalsIgnoreCase(origin.getScheme()))
+                || origin.getHost() == null || origin.getRawUserInfo() != null
+                || !origin.getRawPath().isEmpty() || origin.getRawQuery() != null
+                || origin.getRawFragment() != null || origin.getPort() == 0 || origin.getPort() > 65535
+                || value.endsWith(":")) {
+            throw new IllegalArgumentException(
+                    "APP_CORS_ALLOWED_ORIGINS requiere orígenes HTTP(S) explícitos, sin rutas");
+        }
+        return value;
     }
 
     /**

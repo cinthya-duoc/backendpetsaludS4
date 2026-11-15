@@ -1,10 +1,6 @@
 package com.petsalud.backendpetsalud.security.monitor;
 
-import java.util.ArrayDeque;
-import java.util.Deque;
-import java.util.Map;
 import java.util.Optional;
-import java.util.concurrent.ConcurrentHashMap;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -17,7 +13,7 @@ import jakarta.servlet.http.HttpServletRequest;
 /**
  * Monitoreo de actividad sospechosa.
  * Escribe en el log (con fecha y hora) los logins fallidos, bloqueos, tokens inválidos
- * y accesos denegados. Además BLOQUEA el login por 15 minutos tras 5 intentos fallidos.
+ * y accesos denegados. El contador de intentos se almacena en MySQL.
  * Nunca registra contraseñas ni tokens, y oculta parte del email.
  */
 @Component
@@ -26,43 +22,16 @@ public class ActividadSospechosaService {
     // Todas las líneas salen con el nombre "SEGURIDAD": así se filtran fácil en el log
     private static final Logger log = LoggerFactory.getLogger("SEGURIDAD");
 
-    private static final int MAX_INTENTOS = 5;
-    private static final int MINUTOS_BLOQUEO = 15;
-    private static final long VENTANA_MS = MINUTOS_BLOQUEO * 60 * 1000L;
-
-    // Para cada "email|ip" guarda la hora de cada intento fallido reciente
-    private final Map<String, Deque<Long>> intentosFallidos = new ConcurrentHashMap<>();
-
-    /** ¿Este email, desde esta IP, superó los 5 intentos fallidos en los últimos 15 minutos? */
-    public boolean estaBloqueado(String email, HttpServletRequest request) {
-        Deque<Long> intentos = intentosFallidos.get(clave(email, request));
-        if (intentos == null) {
-            return false;
-        }
-        synchronized (intentos) {
-            borrarAntiguos(intentos);
-            return intentos.size() >= MAX_INTENTOS;
+    public void registrarLoginFallido(String email, HttpServletRequest request, int total) {
+        log.warn("LOGIN_FALLIDO email={} ip={} intentos={}/{}", ocultarEmail(email), ip(request),
+                total, LoginAttemptService.MAX_INTENTOS);
+        if (total == LoginAttemptService.MAX_INTENTOS) {
+            log.warn("CUENTA_BLOQUEADA email={} ip={} minutos={}", ocultarEmail(email), ip(request),
+                    LoginAttemptService.MINUTOS_BLOQUEO);
         }
     }
 
-    /** Suma un intento fallido. Al llegar a 5, deja registrado el bloqueo. */
-    public void registrarLoginFallido(String email, HttpServletRequest request) {
-        Deque<Long> intentos = intentosFallidos.computeIfAbsent(clave(email, request), k -> new ArrayDeque<>());
-        int total;
-        synchronized (intentos) {
-            intentos.addLast(System.currentTimeMillis());
-            borrarAntiguos(intentos);
-            total = intentos.size();
-        }
-        log.warn("LOGIN_FALLIDO email={} ip={} intentos={}/{}", ocultarEmail(email), ip(request), total, MAX_INTENTOS);
-        if (total >= MAX_INTENTOS) {
-            log.warn("CUENTA_BLOQUEADA email={} ip={} minutos={}", ocultarEmail(email), ip(request), MINUTOS_BLOQUEO);
-        }
-    }
-
-    /** Login correcto: borra los intentos fallidos acumulados. */
     public void registrarLoginExitoso(String email, HttpServletRequest request) {
-        intentosFallidos.remove(clave(email, request));
         log.info("LOGIN_EXITOSO email={} ip={}", ocultarEmail(email), ip(request));
     }
 
@@ -93,20 +62,6 @@ public class ActividadSospechosaService {
     }
 
     // ---------- ayudantes ----------
-
-    /** Quita los intentos más antiguos que 15 minutos. */
-    private void borrarAntiguos(Deque<Long> intentos) {
-        long limite = System.currentTimeMillis() - VENTANA_MS;
-        while (!intentos.isEmpty() && intentos.peekFirst() < limite) {
-            intentos.pollFirst();
-        }
-    }
-
-    /** Identifica al que intenta: email (en minúsculas) + IP. */
-    private String clave(String email, HttpServletRequest request) {
-        String e = email == null ? "" : email.trim().toLowerCase();
-        return e + "|" + ip(request);
-    }
 
     /** IP real de la conexión. No usamos X-Forwarded-For porque el cliente lo puede falsificar. */
     private String ip(HttpServletRequest request) {

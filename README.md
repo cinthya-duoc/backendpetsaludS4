@@ -84,6 +84,15 @@ openssl rand -base64 32
 
 ### 4. Ejecutar
 
+Antes de iniciar esta versión, aplica las migraciones de [revocación de JWT](src/main/resources/db/jwt-revocations.sql) y [bloqueo de login](src/main/resources/db/login-attempts.sql). En la consola MySQL, selecciona la base que usa la API con una cuenta que pueda crear tablas y ejecuta:
+
+```sql
+SOURCE /ruta/al/proyecto/src/main/resources/db/jwt-revocations.sql;
+SOURCE /ruta/al/proyecto/src/main/resources/db/login-attempts.sql;
+```
+
+La cuenta de la aplicación necesita permisos de lectura, inserción, actualización y borrado sobre `jwt_revocations` y `auth_login_attempts`. Todas las instancias deben apuntar a la misma base para compartir estos controles.
+
 ```bash
 # Windows
 .\mvnw clean spring-boot:run
@@ -114,8 +123,8 @@ UPDATE petsalud_db.usuarios SET rol = 'EMPLEADO' WHERE email = 'empleado@petsalu
 ## Cómo funciona la seguridad
 
 1. **Login:** el usuario envía email y contraseña a `POST /auth/login`. Spring Security busca la cuenta en MySQL (`UsuarioDetailsService`) y compara la contraseña con **BCrypt**.
-2. **Token:** si es correcta, `JwtUtil` entrega un **token JWT** firmado con HS256, válido por **1 hora**, con los claims `jti`, `iss` (`petsalud-api`), `aud` (`petsalud-clientes`), `sub` (email), `iat` y `exp`.
-3. **Cada petición:** el cliente envía `Authorization: Bearer <token>`. `JwtAuthFilter` valida firma, emisor, audiencia y vencimiento, y carga al usuario con su rol.
+2. **Token:** si es correcta, `JwtUtil` entrega un **token JWT** firmado con HS256, válido por **15 minutos**, con los claims `jti`, `iss` (`petsalud-api`), `aud` (`petsalud-clientes`), `sub` (email), `iat`, `exp` y una versión derivada de las credenciales.
+3. **Cada petición:** el cliente envía `Authorization: Bearer <token>`. `JwtAuthFilter` valida firma, emisor, audiencia, vencimiento y revocación por `jti`. Verifica también que la contraseña no haya cambiado y carga al usuario con su rol.
 4. **Autorización por rol:** `SecurityConfig` decide qué rol puede usar cada ruta.
 5. **Autorización por propiedad:** `@PreAuthorize` junto con el componente `Propiedad` verifica en la base de datos que el recurso pedido pertenezca al usuario logueado.
 
@@ -174,6 +183,12 @@ Todos los errores usan el mismo formato JSON:
 |---|---|---|
 | POST | `/api/usuarios/registro` | Registrar un usuario (siempre rol CLIENTE) |
 | POST | `/auth/login` | Iniciar sesión y obtener el token |
+
+### Sesión autenticada
+
+| Método | Ruta | Descripción |
+|---|---|---|
+| POST | `/auth/logout` | Revocar el JWT presentado en `Authorization` y responder `204` |
 
 ### Usuarios y mascotas
 
@@ -253,6 +268,8 @@ Además: `@Email`, `@Size`, `@Min`/`@Max` (stock, puntos), `@DecimalMin`/`@Digit
 
 ## Monitoreo de actividad sospechosa
 
+MySQL guarda los intentos en `auth_login_attempts` bajo una clave derivada del correo canónico y la IP de la conexión. Se cuentan los fallos de los últimos 15 minutos. El quinto fallo responde `401` y activa un bloqueo de 15 minutos desde ese momento. Los siguientes intentos reciben `429`, incluso con la contraseña correcta. Un login exitoso antes del bloqueo elimina el contador. La hora y el bloqueo de fila de MySQL mantienen un conteo común entre instancias. Un proceso programado limpia registros vencidos.
+
 `ActividadSospechosaService` escribe en el log con el nombre `SEGURIDAD` (en la consola y en `logs/petsalud.log`):
 
 | Evento | Significado |
@@ -325,6 +342,37 @@ postman/                 # Colección de pruebas de Postman
 
 ---
 
+## CORS y encabezados de seguridad
+
+Para un frontend que llama a la API desde otro origen, agrega `APP_CORS_ALLOWED_ORIGINS` al archivo `.env`. El valor es una lista de orígenes separados por comas, con esquema, host y puerto cuando corresponde. Por ejemplo, `APP_CORS_ALLOWED_ORIGINS=http://localhost:5173,https://app.example.com`. Una lista vacía bloquea las peticiones de navegador desde otros orígenes.
+
+La política aplica a `/auth/**` y `/api/**`. Permite GET, POST, PUT y DELETE con los encabezados de solicitud `Authorization` y `Content-Type`. El navegador puede enviar un preflight sin token para comprobar la política. La solicitud protegida posterior requiere su Bearer.
+
+La API JSON usa una CSP que bloquea la carga de recursos, la URL base, los formularios y el uso en marcos. HSTS se envía por HTTPS durante un año y aplica al host de la API. `Referrer-Policy: no-referrer` evita enviar la URL de origen.
+
+| Escenario | Resultado esperado |
+|---|---|
+| Preflight desde un origen configurado, con método PUT y encabezados permitidos | `200` y `Access-Control-Allow-Origin` con el origen solicitado |
+| Preflight desde un origen ajeno o con un método fuera de la política | `403` |
+| Respuesta HTTPS de la API | `Content-Security-Policy`, `Strict-Transport-Security` y `Referrer-Policy` |
+
+## Revocación y renovación del JWT
+
+`POST /auth/logout` guarda en MySQL el `jti` y el vencimiento del token presentado. Todas las instancias que comparten esa base rechazan el token con `401`, incluso después de reiniciar. Los registros vencidos se limpian cada cinco minutos.
+
+Para renovar la sesión, vuelve a autenticarte en `POST /auth/login`. La vigencia corta limita la exposición de un token y volver a pedir credenciales evita mantener otro token de larga duración. `JWT_EXPIRATION_MS` permite reducir la vigencia a partir de un segundo. Todas las instancias deben compartir la clave de firma, el emisor y la audiencia.
+
+Ante una contraseña comprometida, actualízala para invalidar los JWT anteriores de esa cuenta. Si se compromete la clave de firma, rótala en todas las instancias para invalidar todos los JWT previos.
+
+| Escenario | Resultado esperado |
+|---|---|
+| Cerrar sesión con un JWT vigente | `204`; la tabla conserva su `jti` hasta la expiración |
+| Reutilizar el token revocado en otra instancia o tras un reinicio | `401` |
+| Usar otro JWT vigente de la misma cuenta después del cierre de sesión | La solicitud sigue autorizada según el rol |
+| Reutilizar un JWT después de cambiar la contraseña de su cuenta | `401` |
+
+En la verificación local, dos instancias conectadas al mismo MySQL rechazaron con `401` el JWT revocado. El rechazo persistió tras reiniciar una instancia. También se comprobó que un segundo JWT siguió activo tras cerrar la primera sesión y dejó de funcionar después de cambiar la contraseña.
+
 ## Medidas de seguridad implementadas
 
 | Amenaza | Medida |
@@ -332,19 +380,27 @@ postman/                 # Colección de pruebas de Postman
 | Acceso a datos de otros clientes (OWASP API1 – BOLA) | `@PreAuthorize` + `Propiedad`; `403` también para ids inexistentes |
 | Escalamiento de privilegios | Rol `CLIENTE` forzado en el registro; DTO sin campo `rol` en la actualización; reglas por rol en ruta y método |
 | Inyección SQL | Spring Data JPA con consultas parametrizadas + validación de entradas |
-| XSS | Listas blancas que rechazan `< > " ' ;`; respuestas JSON; encabezados por defecto de Spring Security (`X-Content-Type-Options`, `X-Frame-Options`) |
+| XSS | Listas blancas que rechazan `< > " ' ;`; respuestas JSON; CSP explícita, `X-Content-Type-Options` y `X-Frame-Options` |
 | CSRF | API sin estado (`STATELESS`) con token en el encabezado `Authorization`, sin cookies; por eso CSRF está deshabilitado |
 | Fuerza bruta | Bloqueo de 15 minutos tras 5 intentos fallidos (`429`) |
-| Token alterado o falso | Firma HS256 + verificación de emisor, audiencia y expiración (1 hora) |
+| Token alterado o falso | Firma HS256 + verificación de emisor, audiencia, vigencia de 15 minutos y revocación por `jti` |
 | Exposición de datos | Contraseña `WRITE_ONLY` (nunca se devuelve); `@JsonIgnore` en relaciones; errores genéricos; emails ocultos en el log |
 | Exposición de secretos | Clave JWT y credenciales en `.env` (excluido de Git) |
 
+## Matriz de verificación del feedback
+
+| Control | Escenario probado | Resultado observado |
+|---|---|---|
+| Ventas y propiedad | Lista vacía con el ID propio. Cliente con una lista válida intenta comprar para otro usuario. | `400` y `403`, respectivamente. |
+| Citas y expedientes | Cliente y empleado cambian el estado de una cita. Cliente consulta historiales propios y ajenos. Empleado y gerente intentan borrar un expediente. | Cita `403` para cliente y `200` para empleado, con estado persistido. Historial propio `200` y ajeno `403`. Borrado `403` para empleado y `204` para gerente. |
+| CORS y encabezados | Preflight permitido y preflights con origen, método o encabezado ajeno. Solicitud HTTPS. | `200` para el permitido y `403` para los demás. CSP, HSTS y `Referrer-Policy` presentes por HTTPS. |
+| Revocación de JWT | Logout y reutilización del mismo token en dos instancias, incluida una reiniciada. Cambio de contraseña. | Logout `204`; token revocado `401` en ambas instancias. Tokens anteriores al cambio de contraseña recibieron `401`. |
+| Bloqueo de login | Ocho intentos simultáneos repartidos entre dos instancias sobre la misma cuenta e IP. Reinicio con bloqueo vigente y simulación del vencimiento. | Cinco `401` y tres `429`. MySQL conservó cinco fallos y el bloqueo sobrevivió al reinicio. Al simular el vencimiento, la contraseña correcta volvió a dar `200`. |
+
 ## Limitaciones y mejoras futuras
 
-- El contador de intentos fallidos vive en memoria: se reinicia con el servidor y no se comparte entre varias instancias. Se podría mover a Redis o a la base de datos.
-- Un token robado es válido hasta que expira. Se podría agregar una lista de revocación por `jti` o tokens de refresco.
 - HTTPS obligatorio en producción.
-- Encabezado `Content-Security-Policy` y rotación periódica de la clave JWT.
+- Rotación periódica de la clave JWT.
 
 ---
 
