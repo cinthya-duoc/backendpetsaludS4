@@ -8,12 +8,17 @@ import com.petsalud.backendpetsalud.repository.UsuarioRepository;
 import com.petsalud.backendpetsalud.repository.VentaRepository;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
+import org.springframework.util.StringUtils;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 
+/**
+ * Aplica las reglas de venta y construye el registro con el usuario,
+ * los productos y el total calculado a partir de sus precios.
+ */
 @Service
 public class VentaServiceImpl implements VentaService {
 
@@ -31,6 +36,14 @@ public class VentaServiceImpl implements VentaService {
         Usuario usuario = usuarioRepository.findById(usuarioId)
                 .orElseThrow(() -> new IllegalArgumentException("Usuario no encontrado"));
 
+        // Una ficha ya guardada puede estar incompleta. Se valida antes de consultar o descontar stock.
+        if (!StringUtils.hasText(usuario.getNombre())
+                || !StringUtils.hasText(usuario.getApellido())
+                || !StringUtils.hasText(usuario.getEmail())
+                || !StringUtils.hasText(usuario.getDireccion())) {
+            throw new IllegalArgumentException("El usuario tiene datos incompletos");
+        }
+
         List<Producto> productos = productoRepository.findAllById(productosIds);
 
         if (productos.size() != productosIds.size()) {
@@ -42,6 +55,7 @@ public class VentaServiceImpl implements VentaService {
             if (producto.getStock() <= 0) {
                 throw new IllegalArgumentException("El producto " + producto.getNombre() + " no tiene stock disponible");
             }
+
             // Restar stock
             producto.setStock(producto.getStock() - 1);
             productoRepository.save(producto);
