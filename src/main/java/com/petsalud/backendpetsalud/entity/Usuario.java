@@ -13,6 +13,10 @@ import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.petsalud.backendpetsalud.validation.Patrones;
 
+/**
+ * Datos de la cuenta y relaciones del usuario con los recursos de PetSalud.
+ * Las restricciones de los campos se comprueban al recibir un registro con @Valid.
+ */
 @Entity
 @Table(name = "usuarios")
 @Data
@@ -48,6 +52,8 @@ public class Usuario {
     @Pattern(regexp = Patrones.TELEFONO, message = "Teléfono inválido (8 a 12 dígitos)")
     private String telefono;
 
+    // Una dirección vacía o compuesta solo por espacios también invalida el registro.
+    @NotBlank(message = "La dirección es obligatoria")
     @Size(max = 150)
     @Pattern(regexp = Patrones.TEXTO_SEGURO, message = "Contiene caracteres no permitidos")
     private String direccion;

@@ -109,6 +109,36 @@
 					</excludes>
 				</configuration>
 			</plugin>
+            <plugin>
+                <groupId>org.jacoco</groupId>
+                <artifactId>jacoco-maven-plugin</artifactId>
+                <version>0.8.13</version>
+                <executions>
+                    <execution>
+                        <id>preparar-jacoco</id>
+                        <goals>
+                            <goal>prepare-agent</goal>
+                        </goals>
+                    </execution>
+                    <execution>
+                        <id>informe-usuarios-ventas</id>
+                        <phase>verify</phase>
+                        <goals>
+                            <goal>report</goal>
+                        </goals>
+                        <configuration>
+                            <title>PetSalud S4 - Usuarios y ventas</title>
+                            <outputDirectory>${project.reporting.outputDirectory}/jacoco-usuarios-ventas</outputDirectory>
+                            <includes>
+                                <include>com/petsalud/backendpetsalud/controller/UsuarioController.class</include>
+                                <include>com/petsalud/backendpetsalud/controller/VentaController.class</include>
+                                <include>com/petsalud/backendpetsalud/service/UsuarioServiceImpl.class</include>
+                                <include>com/petsalud/backendpetsalud/service/VentaServiceImpl.class</include>
+                            </includes>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
 		</plugins>
 	</build>
 
