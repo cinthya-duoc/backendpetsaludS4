@@ -14,6 +14,9 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.math.BigDecimal;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import java.util.List;
 import java.util.Optional;
 
@@ -198,4 +201,68 @@ class VentaServiceImplTest {
                 .precio(new BigDecimal(precio))
                 .build();
     }
+    @ParameterizedTest(name = "Ficha sin {0} se rechaza en el servicio")
+    @ValueSource(strings = {"nombre", "apellido", "email", "direccion"})
+    void validaFichaPersistidaAntesDeConsultarProductos(String campo) {
+        Usuario usuario = usuarioValido();
+        switch (campo) {
+            case "nombre" -> usuario.setNombre(null);
+            case "apellido" -> usuario.setApellido(null);
+            case "email" -> usuario.setEmail(null);
+            case "direccion" -> usuario.setDireccion(null);
+            default -> throw new IllegalArgumentException("Campo desconocido");
+        }
+        when(usuarioRepository.findById(3L)).thenReturn(Optional.of(usuario));
+
+        IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
+                () -> ventaService.realizarVenta(3L, List.of(1L)));
+
+        assertEquals("El usuario tiene datos incompletos", error.getMessage());
+        verifyNoInteractions(productoRepository, ventaRepository);
+    }
+
+    @Test
+    void calculaVentaDeUnSoloProducto() {
+        Producto articulo = producto(1L, "Alimento", 2, "12.345");
+        when(usuarioRepository.findById(3L)).thenReturn(Optional.of(usuarioValido()));
+        when(productoRepository.findAllById(List.of(1L))).thenReturn(List.of(articulo));
+        when(ventaRepository.save(any(Venta.class))).thenAnswer(llamada -> llamada.getArgument(0));
+
+        Venta venta = ventaService.realizarVenta(3L, List.of(1L));
+
+        assertEquals(new BigDecimal("12.345"), venta.getTotal());
+        assertEquals(1, articulo.getStock());
+    }
+
+    @ParameterizedTest(name = "Suma {0} + {1} = {2}")
+    @CsvSource({"12.3, 0.45, 12.75", "0.10, 0.20, 0.30", "12.345, 0.005, 12.350"})
+    void sumaPreciosConDistintasEscalas(String primerPrecio, String segundoPrecio, String esperado) {
+        Producto primero = producto(1L, "Alimento", 2, primerPrecio);
+        Producto segundo = producto(2L, "Juguete", 2, segundoPrecio);
+        when(usuarioRepository.findById(3L)).thenReturn(Optional.of(usuarioValido()));
+        when(productoRepository.findAllById(List.of(1L, 2L))).thenReturn(List.of(primero, segundo));
+        when(ventaRepository.save(any(Venta.class))).thenAnswer(llamada -> llamada.getArgument(0));
+
+        Venta venta = ventaService.realizarVenta(3L, List.of(1L, 2L));
+
+        assertEquals(new BigDecimal(esperado), venta.getTotal());
+    }
+
+    @Test
+    void rechazaListaVaciaAntesDeConsultarRepositorios() {
+        IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
+                () -> ventaService.realizarVenta(3L, List.of()));
+
+        assertEquals("La venta requiere al menos un producto", error.getMessage());
+        verifyNoInteractions(usuarioRepository, productoRepository, ventaRepository);
+    }
+
+    @Test
+    void rechazaListaNulaAntesDeConsultarRepositorios() {
+        assertThrows(IllegalArgumentException.class,
+                () -> ventaService.realizarVenta(3L, null));
+
+        verifyNoInteractions(usuarioRepository, productoRepository, ventaRepository);
+    }
+
 }

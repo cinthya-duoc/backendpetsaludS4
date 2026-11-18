@@ -33,6 +33,10 @@ public class VentaServiceImpl implements VentaService {
 
     @Override
     public Venta realizarVenta(Long usuarioId, List<Long> productosIds) {
+        if (productosIds == null || productosIds.isEmpty()) {
+            throw new IllegalArgumentException("La venta requiere al menos un producto");
+        }
+
         Usuario usuario = usuarioRepository.findById(usuarioId)
                 .orElseThrow(() -> new IllegalArgumentException("Usuario no encontrado"));
 

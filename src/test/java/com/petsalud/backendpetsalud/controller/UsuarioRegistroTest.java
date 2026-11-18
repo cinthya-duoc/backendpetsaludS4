@@ -1,8 +1,11 @@
 package com.petsalud.backendpetsalud.controller;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.petsalud.backendpetsalud.service.UsuarioService;
-import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -10,14 +13,13 @@ import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
+import java.util.LinkedHashMap;
+
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-/**
- * Comprueba con MockMvc que el registro rechaza solicitudes sin nombre, apellido,
- * correo o dirección antes de llamar al servicio de usuarios simulado.
- */
+/** Valida campos obligatorios en la capa web antes de delegar al servicio simulado. */
 @ExtendWith(MockitoExtension.class)
 class UsuarioRegistroTest {
 
@@ -27,81 +29,29 @@ class UsuarioRegistroTest {
     @InjectMocks
     private UsuarioController usuarioController;
 
-    @Test
-    void rechazaRegistroCuandoFaltaElNombre() throws Exception {
-        MockMvc mvc = MockMvcBuilders.standaloneSetup(usuarioController).build();
+    private MockMvc mvc;
 
-        mvc.perform(post("/api/usuarios/registro")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content("""
-                        {
-                          "apellido": "Perez",
-                          "email": "cliente@example.test",
-                          "password": "Prueba123",
-                          "direccion": "Avenida de prueba 123"
-                        }
-                        """))
-                .andExpect(status().isBadRequest());
-
-        // El 400 debe producirse en la validación de la solicitud, antes de delegar el registro.
-        verifyNoInteractions(usuarioService);
+    @BeforeEach
+    void prepararControlador() {
+        mvc = MockMvcBuilders.standaloneSetup(usuarioController).build();
     }
 
-    @Test
-    void rechazaRegistroCuandoFaltaElApellido() throws Exception {
-        MockMvc mvc = MockMvcBuilders.standaloneSetup(usuarioController).build();
+    @ParameterizedTest(name = "Registro sin {0} devuelve 400")
+    @ValueSource(strings = {"nombre", "apellido", "email", "direccion"})
+    void rechazaRegistroSinCampoObligatorio(String campo) throws Exception {
+        var datos = new LinkedHashMap<String, String>();
+        datos.put("nombre", "Ana");
+        datos.put("apellido", "Perez");
+        datos.put("email", "cliente@example.test");
+        datos.put("password", "Prueba123");
+        datos.put("direccion", "Avenida de prueba 123");
+        datos.remove(campo);
 
         mvc.perform(post("/api/usuarios/registro")
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("""
-                    {
-                      "nombre": "Ana",
-                      "email": "cliente@example.test",
-                      "password": "Prueba123",
-                      "direccion": "Avenida de prueba 123"
-                    }
-                    """))
+                        .content(new ObjectMapper().writeValueAsString(datos)))
                 .andExpect(status().isBadRequest());
 
         verifyNoInteractions(usuarioService);
     }
-
-    @Test
-    void rechazaRegistroCuandoFaltaElCorreo() throws Exception {
-        MockMvc mvc = MockMvcBuilders.standaloneSetup(usuarioController).build();
-
-        mvc.perform(post("/api/usuarios/registro")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content("""
-                    {
-                      "nombre": "Ana",
-                      "apellido": "Perez",
-                      "password": "Prueba123",
-                      "direccion": "Avenida de prueba 123"
-                    }
-                    """))
-                .andExpect(status().isBadRequest());
-
-        verifyNoInteractions(usuarioService);
-    }
-
-    @Test
-    void rechazaRegistroCuandoFaltaLaDireccion() throws Exception {
-        MockMvc mvc = MockMvcBuilders.standaloneSetup(usuarioController).build();
-
-        mvc.perform(post("/api/usuarios/registro")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content("""
-                    {
-                      "nombre": "Ana",
-                      "apellido": "Perez",
-                      "email": "cliente@example.test",
-                      "password": "Prueba123"
-                    }
-                    """))
-                .andExpect(status().isBadRequest());
-
-        verifyNoInteractions(usuarioService);
-    }
-
 }
