@@ -1,8 +1,10 @@
-# Backend Clínica PetSalud – Semana 3 (Seguridad integral)
+# Backend Clínica PetSalud – Seguridad y pruebas unitarias
 
 Backend de la Clínica Veterinaria **PetSalud** desarrollado para la asignatura **Desarrollo Backend II (PBY2202)** de Duoc UC Online.
 
-Sobre la base de la semana 2 (Spring Security + JWT), en esta etapa se integró la seguridad completa del backend:
+El proyecto integra la seguridad de Semana 3, las pruebas de usuarios y ventas de Semana 4 y las pruebas de citas y usuarios de Semana 5. La rama `pruebas-semana5` conserva los controles anteriores e incorpora validaciones de negocio y evidencia de cobertura.
+
+Controles de seguridad implementados:
 
 - **Autorización a nivel de objeto:** cada cliente solo puede ver y modificar *sus* datos (usuario, mascotas, citas, historial médico, compras, notificaciones y recompensas), aunque cambie los ids de la URL.
 - **JWT reforzado:** el token incluye id único (`jti`), emisor (`iss`) y audiencia (`aud`), y se validan en cada petición.
@@ -10,7 +12,7 @@ Sobre la base de la semana 2 (Spring Security + JWT), en esta etapa se integró 
 - **Errores uniformes en JSON** (400, 401, 403, 404, 409, 429, 500) sin exponer detalles internos.
 - **Secretos fuera del código** en un archivo `.env` que no se sube al repositorio.
 - **Monitoreo de actividad sospechosa** en un log y **bloqueo del login** tras 5 intentos fallidos.
-- **Pruebas automatizadas en Postman:** 43 de 43 aprobadas.
+- **Pruebas automatizadas:** suite JUnit y Mockito, reporte JaCoCo y colección de Postman para comprobaciones de la API.
 
 ---
 
@@ -25,6 +27,9 @@ Sobre la base de la semana 2 (Spring Security + JWT), en esta etapa se integró 
 | Bean Validation (`spring-boot-starter-validation`) | 3.x |
 | jjwt (Java JWT) | 0.12.6 |
 | MySQL | 8 |
+| JUnit Jupiter y Mockito | Incluidos mediante `spring-boot-starter-test` (alcance `test`) |
+| Spring Security Test | Alcance `test` |
+| JaCoCo | 0.8.13 |
 | Lombok | — |
 | Maven (wrapper incluido) | — |
 
@@ -43,8 +48,8 @@ Sobre la base de la semana 2 (Spring Security + JWT), en esta etapa se integró 
 ### 1. Clonar el repositorio
 
 ```bash
-git clone https://github.com/matisuarezm/backendpetsaludS3.git
-cd backendpetsaludS3
+git clone --branch pruebas-semana5 https://github.com/cinthya-duoc/backendpetsaludS4.git
+cd backendpetsaludS4
 ```
 
 ### 2. Crear la base de datos y el usuario en MySQL
@@ -56,7 +61,15 @@ GRANT ALL PRIVILEGES ON petsalud_db.* TO 'petsalud_user'@'%';
 FLUSH PRIVILEGES;
 ```
 
-Las tablas se crean automáticamente al iniciar la aplicación (`spring.jpa.hibernate.ddl-auto=update`).
+Las tablas JPA se crean o actualizan al iniciar la aplicación (`spring.jpa.hibernate.ddl-auto=update`).
+
+La configuración predeterminada usa `petsalud_db`. Si ya utilizas otra base, como `letrasypapeles_db`, configura su URL antes de iniciar la aplicación o ejecutar la suite completa:
+
+```bash
+export SPRING_DATASOURCE_URL='jdbc:mysql://localhost:3306/letrasypapeles_db?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC'
+```
+
+Usa esa misma base en las migraciones y consultas de preparación. No es necesario renombrarla.
 
 ### 3. Crear el archivo `.env` con los secretos
 
@@ -80,7 +93,7 @@ $b = New-Object byte[] 32; [Security.Cryptography.RandomNumberGenerator]::Create
 openssl rand -base64 32
 ```
 
-> **Importante:** `.env` está en `.gitignore` y **nunca** debe subirse a GitHub. `application.properties` solo contiene referencias a las variables (`${DB_USER}`, `${DB_PASSWORD}`, `${JWT_SECRET}`).
+> **Importante:** `.env` está en `.gitignore` y **nunca** debe subirse a GitHub. las credenciales y la clave JWT se obtienen mediante referencias a variables (`${DB_USER}`, `${DB_PASSWORD}`, `${JWT_SECRET}`).
 
 ### 4. Ejecutar
 
@@ -299,6 +312,72 @@ Cuidados del registro:
 
 ---
 
+## Pruebas automatizadas y cobertura — Semana 5
+
+Las pruebas se encuentran en `src/test/java/com/petsalud/backendpetsalud/`. JUnit ejecuta los casos, Mockito simula repositorios y servicios, MockMvc permite probar solicitudes web y Spring Security Test comprueba permisos. Las validaciones del modelo también se ejercitan con un `Validator` real.
+
+### Ejecutar las pruebas
+
+Desde la raíz del proyecto, con Java 17 y Maven disponibles:
+
+```bash
+# Ejecutar únicamente las pruebas del servicio de citas
+mvn -Dtest=CitaServiceImplTest test
+
+# Ejecutar las pruebas de Semana 5 sin cargar el contexto completo de la aplicación
+mvn -Dtest=CitaServiceImplTest,CitaControllerTest,CitaPermisosTest,UsuarioValidacionTest,UsuarioMascotaTest test
+
+# Ejecutar toda la suite y generar los reportes de cobertura
+mvn clean verify
+```
+
+También puedes usar `./mvnw` en lugar de `mvn`. En macOS, si necesitas seleccionar Java 17, ejecuta primero `export JAVA_HOME="$(/usr/libexec/java_home -v 17)"`.
+
+Las pruebas aisladas simulan sus dependencias y no necesitan iniciar la API. La suite completa incluye `BackendpetsaludApplicationTests`, que carga el contexto Spring: requiere MySQL accesible, `.env` configurado y las tablas de seguridad preparadas según la instalación. Para evitar cambios automáticos del esquema durante esa ejecución, puedes usar `SPRING_JPA_HIBERNATE_DDL_AUTO=none mvn clean verify` una vez preparada la base.
+
+### Escenarios de Semana 5
+
+| Clase | Ejecuciones | Reglas o comportamiento verificado |
+|---|---:|---|
+| `CitaServiceImplTest` | 14 | Estado inicial `Agendada`, relaciones, propietario registrado, empleado existente con rol `EMPLEADO`, disponibilidad y estados permitidos |
+| `CitaControllerTest` | 5 | Delegación al servicio y respuestas de creación, consulta, actualización y cancelación |
+| `CitaPermisosTest` | 3 | Cambio de estado denegado a `CLIENTE` y permitido a `EMPLEADO` y `GERENTE` |
+| `UsuarioValidacionTest` | 10 | Nombre y correo obligatorios; rol obligatorio mediante el grupo `CuentaCompleta` y roles admitidos |
+| `UsuarioMascotaTest` | 9 | Asociación bidireccional cliente–mascotas y validaciones de nombre y especie |
+
+Son **41 ejecuciones de Semana 5**. Junto con las pruebas conservadas de usuarios, ventas y propiedad, la última ejecución completa registró **82 pruebas, 0 fallos, 0 errores y 0 omitidas**. Los casos parametrizados cuentan como ejecuciones independientes.
+
+Se utilizan los roles `CLIENTE`, `EMPLEADO` y `GERENTE`. `EMPLEADO` representa al personal clínico y `GERENTE` al administrativo. Los nombres existentes como `veterinarioId` se conservan en la API, pero la cuenta asignada a una cita debe tener rol `EMPLEADO`.
+
+### Consultar la cobertura
+
+JaCoCo conecta su agente antes de las pruebas (`prepare-agent`) y genera los informes en la fase `verify` (`report`). Después de `mvn clean verify`, abre:
+
+- **Semana 5, citas y usuarios:** `target/site/jacoco-citas-usuarios/index.html`.
+- **Semana 4, usuarios y ventas:** `target/site/jacoco-usuarios-ventas/index.html`.
+- **Resultados de ejecución:** `target/surefire-reports/`.
+
+En macOS:
+
+```bash
+open target/site/jacoco-citas-usuarios/index.html
+```
+
+La medición final de Semana 5 fue **83,2 % de líneas cubiertas (79 de 95)**, frente al **46,1 % inicial (35 de 76)**. Las reglas incorporadas durante el trabajo aumentaron también el número de líneas del alcance.
+
+El reporte de Semana 5 incluye exclusivamente `CitaController`, `UsuarioController`, `CitaServiceImpl` y `UsuarioServiceImpl`: **no representa la cobertura de todo el backend**. El porcentaje indicado corresponde a líneas; las columnas de instrucciones y ramas de JaCoCo miden aspectos diferentes. El resultado supera el 80 % solicitado, aunque el `pom.xml` no configura un umbral automático que haga fallar la compilación por cobertura.
+
+Para documentar una nueva ejecución, conserva una captura del resumen de Maven con el total de pruebas y otra del reporte de cobertura. Los valores publicados aquí corresponden a la última verificación y deben revisarse si cambia el código.
+
+### Alcance y límites
+
+- Las asociaciones se comprueban con objetos y repositorios simulados; estas pruebas no verifican su persistencia real en MySQL.
+- Las pruebas directas del controlador comprueban su respuesta y delegación. Los permisos y las restricciones del modelo se comprueban en clases específicas; no todas las pruebas activan el flujo HTTP completo.
+- El conflicto de citas se detecta para el mismo empleado y la misma fecha y hora, salvo citas `Cancelada`. No se modelan intervalos de duración ni se garantiza la exclusión de reservas simultáneas entre instancias.
+- El rol obligatorio del modelo se valida mediante el grupo `CuentaCompleta`; el registro público asigna siempre `CLIENTE` desde el servicio.
+
+---
+
 ## Pruebas con Postman
 
 La colección `postman/PetSalud_S3_Pruebas_Propiedad.postman_collection.json` tiene 41 peticiones ordenadas en 6 carpetas:
@@ -336,6 +415,11 @@ src/main/java/com/petsalud/backendpetsalud/
 │   └── monitor/         # ActividadSospechosaService (log de seguridad y bloqueo)
 ├── service/             # Lógica de negocio
 └── validation/          # Patrones (expresiones regulares reutilizables)
+src/test/java/com/petsalud/backendpetsalud/
+├── controller/          # Respuestas web, registro y permisos de citas y ventas
+├── entity/              # Validaciones de Usuario y relaciones con Mascota
+├── security/            # Comportamiento real de Propiedad con repositorios simulados
+└── service/             # Reglas de negocio de citas, usuarios y ventas
 postman/                 # Colección de pruebas de Postman
 .env.example             # Plantilla de variables secretas (el .env real no se sube)
 ```
