@@ -1,4 +1,4 @@
-# Backend Clínica PetSalud – Semana 3 (Seguridad integral)
+# Backend Clínica PetSalud – Semana 5 (Pruebas Unitarias)
 
 Backend de la Clínica Veterinaria **PetSalud** desarrollado para la asignatura **Desarrollo Backend II (PBY2202)** de Duoc UC Online.
 
