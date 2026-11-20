@@ -25,6 +25,13 @@ import com.petsalud.backendpetsalud.validation.Patrones;
 @AllArgsConstructor
 public class Usuario {
 
+    /**
+     * Identifica la validación de una cuenta con su rol ya asignado.
+     * Durante el registro público, el servicio asigna CLIENTE.
+     */
+    public interface CuentaCompleta {
+    }
+
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
@@ -58,6 +65,11 @@ public class Usuario {
     @Pattern(regexp = Patrones.TEXTO_SEGURO, message = "Contiene caracteres no permitidos")
     private String direccion;
 
+    // Una cuenta completa debe tener un rol definido.
+    @NotNull(
+            message = "El rol es obligatorio",
+            groups = CuentaCompleta.class
+    )
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
     private Rol rol;

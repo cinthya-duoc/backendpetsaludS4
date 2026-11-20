@@ -137,6 +137,23 @@
                             </includes>
                         </configuration>
                     </execution>
+                    <execution>
+                        <id>informe-citas-usuarios</id>
+                        <phase>verify</phase>
+                        <goals>
+                            <goal>report</goal>
+                        </goals>
+                        <configuration>
+                            <title>PetSalud Semana 5 - Citas y usuarios</title>
+                            <outputDirectory>${project.reporting.outputDirectory}/jacoco-citas-usuarios</outputDirectory>
+                            <includes>
+                                <include>com/petsalud/backendpetsalud/controller/CitaController.class</include>
+                                <include>com/petsalud/backendpetsalud/controller/UsuarioController.class</include>
+                                <include>com/petsalud/backendpetsalud/service/CitaServiceImpl.class</include>
+                                <include>com/petsalud/backendpetsalud/service/UsuarioServiceImpl.class</include>
+                            </includes>
+                        </configuration>
+                    </execution>
                 </executions>
             </plugin>
 		</plugins>
